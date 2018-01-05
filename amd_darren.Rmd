@@ -1,0 +1,114 @@
+---
+title: "Projet ADM - MIASHS"
+output:
+  word_document: default
+  html_notebook: default
+  html_document: default
+---
+
+## I.Préparation des données et enrichissement
+
+### 1. Importation des libraries
+
+
+```{r, message=FALSE, warning=FALSE}
+library(FactoMineR)
+library(factoextra)
+library(tidyr)
+```
+
+### 2. Importation des données
+
+Les fichiers CSV du dossier data sont tous importés dans un dataframe nommé df.
+
+Deux autres dataframe sont crées pour répartir les données train et les données test.
+
+Les dates et les modalités sans valeurs sont supprimées, ainsi que les lignes qui contiennent des données manquantes. 
+```{r}
+files = list.files(path = "data/", pattern="*.csv")
+for (i in 1:length(files)){
+  files[i] = paste("data/",files[i],sep="")
+}
+df = do.call(rbind, lapply(files, function(x) read.csv2(x, sep = ";", stringsAsFactors = F)))
+
+files = list.files(path = "data/", pattern="*-train.csv")
+for (i in 1:length(files)){
+  files[i] = paste("data/",files[i],sep="")
+}
+df_train = do.call(rbind, lapply(files, function(x) read.csv2(x, sep = ";", stringsAsFactors = F)))
+
+files = list.files(path = "data/", pattern="*-test.csv")
+for (i in 1:length(files)){
+  files[i] = paste("data/",files[i],sep="")
+}
+df_test = do.call(rbind, lapply(files, function(x) read.csv2(x, sep = ";", stringsAsFactors = F)))
+
+df = na.exclude(df[,1:29])[,3:29]
+df_train = na.exclude(df_train[,1:29])[,3:29]
+df_test = na.exclude(df_test[,1:29])[,3:29]
+```
+
+
+## II. Analyse descriptive par ACP
+
+Commençons par effectuer une ACP en utilisant toutes les données quantitatives à notre disposition. Nous travaillons avec des données standardisées afin de prévenir tout problème d'unité de mesure.
+
+```{r}
+res_pca <- PCA(df, scale.unit = T, graph=F)
+```
+
+**Commençons par déterminer un nombre pertinant de composantes à retenir.**
+
+```{r}
+fviz_screeplot(res_pca, ncp=10)
+```
+
+Deux composantes semble être suffisant, étant donné que l'ajout d'une troisième dimension ne semble pas
+ajouter une valeur-ajoutée assez conséquente pour être indispensable.
+
+**Vérifions la contribution de chaque dimenension par rapport aux variables.**
+
+
+```{r}
+fviz_contrib(res_pca, choice = "var", axes = 1)
+fviz_contrib(res_pca, choice = "var", axes = 2)
+```
+
+En étudiant les corrélations apportées par chaque dimension, on s'aperçoit que la première explique une grande partie des données. Les deux autres ne font qu'apporter plus d'information sur deux variables non corrélées dans la première dimension.
+
+```{r}
+fviz_pca_var(res_pca, axes=c(1,2))
+```
+
+Ce graphe des variables confirme qu'une grande majorité des variables sont bien représentés par les deux dimensions.
+
+On peut déjà remarquer que trois variables (sigmap, sigmam et skew) sont inversement corrélées avec la plupart des autres variables sur l'axe de la première dimension.
+
+**Etudions maitenant les individus :**
+
+```{r}
+fviz_pca_ind(res_pca)
+```
+
+Un groupe d'individu semble former une aggrégation dans les valeurs négative de la dimension 1, alors que les individus des valeurs positives semblent plus dispersés.
+
+## III. Modélisation de la prédiction de h13d par modèles linéaires (classique, pcr et pls)
+
+Tout d'abord, projetons les données d'apprentisage et de test sur les axes de l'ACP.
+
+```{r}
+res_pca = PCA(df_train, scale.unit = T, graph = F)
+train_proj = res_pca$ind$coord
+test_proj = t(apply(df_test, MARGIN = 1, FUN = function(x) { (x - res_pca$call$centre)/res_pca$call$ecart.type} )) %*% res_pca$svd$V
+```
+
+
+
+### 1. Régression classique
+
+```{r, warning=FALSE}
+reg = lm(h13d~.,data = df_train)
+cat('RMSE :',sqrt(mean((predict(reg, df_test[,2:ncol(df_test)])-df_test[,1])^2)))
+```
+
+### 2. Régression sur Composantes Principales
