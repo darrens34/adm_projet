@@ -15,6 +15,10 @@ output:
 library(FactoMineR)
 library(factoextra)
 library(tidyr)
+library(pls)
+library(mda802)
+library(MASS)
+library(scales)
 ```
 
 ### 2. Importation des données
@@ -70,8 +74,8 @@ ajouter une valeur-ajoutée assez conséquente pour être indispensable.
 
 
 ```{r}
-fviz_contrib(res_pca, choice = "var", axes = 1)
-fviz_contrib(res_pca, choice = "var", axes = 2)
+barplot(res_pca$var$contrib[,1])
+barplot(res_pca$var$contrib[,2])
 ```
 
 En étudiant les corrélations apportées par chaque dimension, on s'aperçoit que la première explique une grande partie des données. Les deux autres ne font qu'apporter plus d'information sur deux variables non corrélées dans la première dimension.
@@ -100,15 +104,110 @@ Tout d'abord, projetons les données d'apprentisage et de test sur les axes de l
 res_pca = PCA(df_train, scale.unit = T, graph = F)
 train_proj = res_pca$ind$coord
 test_proj = t(apply(df_test, MARGIN = 1, FUN = function(x) { (x - res_pca$call$centre)/res_pca$call$ecart.type} )) %*% res_pca$svd$V
+train_proj <- as.data.frame(train_proj)
+test_proj <- as.data.frame(test_proj)
+test_proj$h13d <- df_test$h13d
+train_proj$h13d <- df_train[1:25,]$h13d
+colnames(test_proj) <- colnames(train_proj)
 ```
 
-
+**Maintenant, comparons différents trois modèles issus de méthodes différentes.**
 
 ### 1. Régression classique
 
 ```{r, warning=FALSE}
 reg = lm(h13d~.,data = df_train)
-cat('RMSE :',sqrt(mean((predict(reg, df_test[,2:ncol(df_test)])-df_test[,1])^2)))
+summary(reg)
 ```
+La régréssion classique ne peut pas fonctionner, car il y a plus de régresseurs que de données dans le jeu d'apprentisssage. 
+
+Nous pourrions supprimer des régresseurs (au moins trois pour pouvoir effectuer la régression), mais nous choisissons plutôt de **travailler directement sur les composantes.**
 
 ### 2. Régression sur Composantes Principales
+
+Nous utilisons les données projetées précedemment, et nous effectuons une régression en uilisant les composantes.
+
+```{r}
+model_pcr <- lm(h13d ~ ., data = train_proj)
+step(model_pcr, direction = "both")
+summary(model_pcr)
+predict_pcr <- predict(model_pcr, test_proj)
+rmse <- sqrt(mean((model_pcr$residuals)^2))
+cat('RMSE :',rmse)
+```
+
+**Comparons ce modèle avec la méthode Partial Least Square Regression.**
+
+### 3. Partial Least Square Regression
+
+```{r}
+plsr_fit <- plsr(h13d ~ ., data = df_train)
+summary(plsr_fit)
+```
+
+La variance expliquée atteint assez rapidement les 98 % pour cinq composants. Cela doit être un nombre de componsant intéressant.
+
+**Etudions maintenant l'évolution du RMSEP (Root Mean Square Error of Prediction).**
+```{r}
+plot(RMSEP(plsr_fit))
+```
+
+Le choix des cinq composants semble encore être une bonne solution, car il correspond au moment où l'évolution du RMSEP se stabilise. Le modèle est donc quasiment à sa précision optimale. Nous utiliserons donc cinq composants.
+
+```{r}
+plot(plsr_fit, ncomp = 5, asp = 1, line = T)
+```
+
+** Vérifions maitenant si notre modèle est bon en le testant sur nos données de test.**
+```{r}
+pred <- predict(plsr_fit, ncomp = 5, newdata = df_test)
+rmse <- sqrt(mean((pred - df_test$h13d)^2))
+cat('RMSE :',rmse)
+```
+
+### 4. Conclusion
+
+La PCR semble être le modèle qui est le plus fiable. C'est donc celui-là que nous choisirions.
+
+## IV. Classification et prédiction des classes d’individus
+
+Construisons une classe "type de vague", qui caractérise les grandes, les moyennes et le petites vagues.
+
+```{r}
+df_train$vague <- with(df, ifelse(
+  df_train$h13d > 2, 'grande', ifelse(
+  df_train$h13d >= 1, 'moyenne','petite')))
+
+df_test$vague <- with(df, ifelse(
+  df_test$h13d > 2, 'grande', ifelse(
+  df_test$h13d >= 1, 'moyenne','petite')))
+```
+
+Maintenant construisons notre classificateur. Il nous permettra de déterminer le type de vague, si nous n'avons accès à aucune information sur la hauteur de la vague.
+
+```{r}
+lda_fit <- lda(vague ~., data =df_train[6:28])
+plda <- predict(object = lda_fit, newdata = df_train)
+prop_lda = lda_fit$svd^2 / sum(lda_fit$svd)
+
+dataset = data.frame(vague = df_train[,"vague"], lda = plda$x)
+
+# plot
+library(scales)
+p1 <- ggplot(dataset) + geom_point(aes(lda.LD1, lda.LD2, colour = vague, shape = vague), size = 2.5) + 
+  labs(x = paste("LD1 (", percent(prop_lda[1]), ")", sep=""),
+       y = paste("LD2 (", percent(prop_lda[2]), ")", sep="")) +
+  theme_bw() +
+  labs(title = "LDA", subtitle = "dataset")
+
+p1
+```
+
+**Vérifions l'efficacité de notre classificateur.**
+
+```{r}
+pred <- predict(lda_fit, df_test)
+cat("Fréquence de bon résultat : ",mean(pred$class == df_test$vague))
+```
+
+Ainsi, le classificateur que nous avons crée est bon une fois sur trois, ce qui est quand même intéressant en prenant en compte le fait que nous avons suprimé toutes les données directement en rapport avec la hauteur de la vague elle-même.
