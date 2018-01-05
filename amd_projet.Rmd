@@ -1,0 +1,101 @@
+---
+title: "amd_projet"
+author: "Niaré Seydou"
+date: "5 janvier 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Importation des packages 
+ - FactoMineR
+ - factoextra
+ - tidyverse
+
+```{r libraries, message=FALSE, warning=FALSE,}
+library(FactoMineR)
+library(factoextra)
+library(tidyverse)
+```
+
+# Importation des données
+
+```{r}
+  files = list.files(path = "data/", pattern="*.csv")
+  for (i in 1:length(files)){
+    files[i] = paste("data/",files[i],sep="")
+  }
+  df = do.call(rbind, lapply(files, function(x) read.csv2(x, sep = ";", stringsAsFactors = FALSE)))
+  
+  files = list.files(path = "data/", pattern="*-train.csv")
+  for (i in 1:length(files)){
+    files[i] = paste("data/",files[i],sep="")
+  }
+  df_train = do.call(rbind, lapply(files, function(x) read.csv2(x, sep = ";", stringsAsFactors = FALSE)))
+  
+  files = list.files(path = "data/", pattern="*-test.csv")
+  for (i in 1:length(files)){
+    files[i] = paste("data/",files[i],sep="")
+  }
+  df_test = do.call(rbind, lapply(files, function(x) read.csv2(x, sep = ";", stringsAsFactors = FALSE)))
+```
+## 1) ACP 
+
+```{r}
+  df = na.exclude(df_train[,1:29])
+  res_pca <- PCA(df[,3:29], ncp = 5, scale.unit = TRUE, graph=TRUE)
+```
+
+## 2) PCR
+# Separation de jeu de donnée
+```{r, message=FALSE, warning=FALSE}
+  
+  train_proj <- res_pca$ind$coord
+
+  test_standard <- df_test
+  # standardisation
+  test_standard[,3:14] <- t(apply( df_test[,3:14], MARGIN = 1, FUN = function(x) { (x -   res_pca$call$centre)/res_pca$call$ecart.type}))
+  # projection
+  test_proj <- as.matrix(test_standard[,3:14]) %*% as.matrix(res_pca$svd$V[3:14,])
+```
+
+# 2.1 
+
+```{r}
+# convert to dataframe
+train_proj <- as.data.frame(train_proj)
+test_proj <- as.data.frame(test_proj)
+# add target column
+test_proj$h13d <- df_test$h13d
+train_proj$h13d <- df_train[1:25,]$h13d
+# rename variables to work with predict function
+colnames(test_proj) <- colnames(train_proj)
+```
+
+# 2.2 modele
+
+```{r}
+model_pcr <- lm(h13d ~ . , data = train_proj)
+summary(model_pcr)
+
+```
+
+```{r, echo=FALSE}
+# prediction
+predict_pcr <- predict(model_pcr, newdata = test_proj, interval = "prediction")
+predict_pcr
+# RMSE
+rmse <- sqrt(mean((predict_pcr[,1] - test_proj$h13d)^2))
+rmse
+# Plot
+as.data.frame(predict_pcr) %>% cbind(., measured = test_proj$h13d) %>%
+  ggplot(mapping = aes(x = measured, y = fit)) +
+    geom_point() +
+    geom_abline(mapping = aes(slope=0.9, intercept=0.5), color='red', linetype=2) +
+    theme_bw() +
+    labs(title = "h13d target", subtitle = paste("RMSE:",round(rmse)))
+```
